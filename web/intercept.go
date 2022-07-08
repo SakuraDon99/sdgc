@@ -1,4 +1,4 @@
-package core
+package web
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"strconv"
 )
 
-func GinInterceptor(f any) gin.HandlerFunc {
+func Intercept(f any) gin.HandlerFunc {
 	ft := reflect.TypeOf(f)
 	fv := reflect.ValueOf(f)
 
@@ -39,11 +39,13 @@ func GinInterceptor(f any) gin.HandlerFunc {
 					field: i,
 					query: query,
 				})
-			} else if body := tag.Get("body"); body != "" {
-				binders = append(binders, &bodyBinder{
-					field: i,
-					body:  pe.Field(i).Type(),
-				})
+			} else if request := tag.Get("request"); request != "" {
+				if request == "json" {
+					binders = append(binders, &requestJSONBinder{
+						field: i,
+						body:  pe.Field(i).Type(),
+					})
+				}
 			} else if code := tag.Get("success"); code != "" {
 				successHTTPCode, err = strconv.Atoi(code)
 				if err != nil || successHTTPCode < 100 || successHTTPCode > 999 {
@@ -73,37 +75,33 @@ func GinInterceptor(f any) gin.HandlerFunc {
 
 		outcomes := fv.Call(incomes)
 
-		var errVal reflect.Value
-		if len(outcomes) == 1 {
-			errVal = outcomes[0]
-		} else {
-			errVal = outcomes[1]
+		// if handler does not return parameters, return client success
+		if len(outcomes) == 0 {
+			c.Status(successHTTPCode)
+			return
 		}
 
-		if err, ok := errVal.Interface().(error); ok {
+		response := outcomes[0]
+		errResponse := outcomes[len(outcomes)-1]
+
+		if err, ok := errResponse.Interface().(error); ok {
 			handleError(c, err)
 			return
 		}
 
-		if len(outcomes) == 1 {
-			c.Status(successHTTPCode)
-		} else {
-			response := outcomes[0]
-			handleResponse(c, response, successHTTPCode)
-		}
+		handleResponse(c, response, successHTTPCode)
 	}
 }
 
 func validateHandlerFunc(ft reflect.Type) bool {
-	if ft.Kind() != reflect.Func || ft.NumIn() < 1 || ft.NumOut() > 2 || ft.NumOut() < 1 || ft.NumOut() > 2 {
+	if ft.Kind() != reflect.Func || ft.NumIn() < 1 || ft.NumIn() > 2 || ft.NumOut() > 2 {
 		return false
 	}
+	// the first income parameter must be context
 	if ft.In(0).Name() != "Context" {
 		return false
 	}
-	if ft.NumOut() == 1 && ft.Out(0).Name() != "error" {
-		return false
-	}
+	// if handler return 2 parameters, the second parameter must be error
 	if ft.NumOut() == 2 && ft.Out(1).Name() != "error" {
 		return false
 	}
@@ -139,10 +137,14 @@ func httpErrorCode(err error) int {
 }
 
 func handleResponse(c *gin.Context, response reflect.Value, statusCode int) {
-	switch res := response.Interface().(type) {
-	case string:
-		c.String(statusCode, res)
-	default:
-		c.JSON(statusCode, res)
+	if (response.Kind() == reflect.Ptr || response.Kind() == reflect.Interface) && response.IsNil() {
+		c.Status(statusCode)
+		return
 	}
+	if response.Kind() == reflect.Slice && response.IsNil() {
+		c.JSON(statusCode, make([]any, 0))
+		return
+	}
+
+	c.JSON(statusCode, response.Interface())
 }

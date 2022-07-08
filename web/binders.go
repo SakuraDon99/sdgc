@@ -1,4 +1,4 @@
-package core
+package web
 
 import (
 	"github.com/gin-gonic/gin"
@@ -31,12 +31,12 @@ func (b *queryBinder) Bind(c *gin.Context, param reflect.Value) error {
 	return err
 }
 
-type bodyBinder struct {
+type requestJSONBinder struct {
 	field int
 	body  reflect.Type
 }
 
-func (b *bodyBinder) Bind(c *gin.Context, param reflect.Value) error {
+func (b *requestJSONBinder) Bind(c *gin.Context, param reflect.Value) error {
 	body := reflect.New(b.body).Interface()
 	err := c.ShouldBindJSON(body)
 	if err != nil {
